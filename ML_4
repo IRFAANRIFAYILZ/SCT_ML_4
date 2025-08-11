@@ -1,0 +1,241 @@
+import cv2
+import mediapipe as mp
+import tkinter as tk
+from tkinter import filedialog, messagebox
+from PIL import Image, ImageTk
+import threading
+import math
+
+# ----------------- Mediapipe Setup -----------------
+mp_hands = mp.solutions.hands
+mp_drawing = mp.solutions.drawing_utils
+
+GESTURES = {
+    "FIST": "✊",
+    "ONE": "☝️",
+    "TWO": "✌️",
+    "THREE": "🤟",
+    "OPEN": "🖐️",
+    "THUMBS_UP": "👍",
+    "THUMBS_DOWN": "👎",
+    "PEACE": "✌️",
+    "I_LOVE_YOU": "🫶"
+}
+
+def distance(lm1, lm2):
+    return math.sqrt((lm1.x - lm2.x) ** 2 + (lm1.y - lm2.y) ** 2)
+
+def detect_gesture(hand_landmarks):
+    fingers = []
+    thumb_is_open = hand_landmarks.landmark[4].x < hand_landmarks.landmark[3].x
+    fingers.append(1 if thumb_is_open else 0)
+    for tip_idx, pip_idx in [(8,6),(12,10),(16,14),(20,18)]:
+        fingers.append(1 if hand_landmarks.landmark[tip_idx].y < hand_landmarks.landmark[pip_idx].y else 0)
+    total_fingers = sum(fingers)
+    thumb_tip = hand_landmarks.landmark[4]
+    wrist = hand_landmarks.landmark[0]
+    if total_fingers == 1 and fingers[0] == 1:
+        if thumb_tip.y < wrist.y:
+            return "THUMBS_UP"
+        else:
+            return "THUMBS_DOWN"
+    if total_fingers == 0:
+        return "FIST"
+    elif total_fingers == 1:
+        return "ONE"
+    elif total_fingers == 2:
+        if fingers[1] == 1 and fingers[2] == 1 and fingers[3] == 0 and fingers[4] == 0:
+            return "PEACE"
+        else:
+            return "TWO"
+    elif total_fingers == 3:
+        return "THREE"
+    else:
+        return "OPEN"
+
+def detect_heart_hands(multi_hand_landmarks):
+    if len(multi_hand_landmarks) != 2:
+        return False
+    hand1, hand2 = multi_hand_landmarks
+    h1_thumb = hand1.landmark[4]
+    h1_index = hand1.landmark[8]
+    h2_thumb = hand2.landmark[4]
+    h2_index = hand2.landmark[8]
+    thumb_distance = distance(h1_thumb, h2_thumb)
+    index_distance = distance(h1_index, h2_index)
+    threshold = 0.05
+    thumbs_inward = (h1_thumb.x < h1_index.x) and (h2_thumb.x > h2_index.x)
+    if thumb_distance < threshold and index_distance < threshold and thumbs_inward:
+        return True
+    return False
+
+class HandGestureApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("🤖 Hand Gesture Recognition")
+        self.root.geometry("750x600")
+        self.root.config(bg="#121212")
+
+        self.label_var = tk.StringVar()
+        self.label_var.set("Upload an image, video, or use webcam.")
+
+        title_label = tk.Label(root, text="Hand Gesture Recognition Tool",
+                               fg="#00FFAA", bg="#121212", font=("Consolas", 22, "bold"))
+        title_label.pack(pady=12)
+
+        self.panel = tk.Label(root, bg="#121212")
+        self.panel.pack()
+
+        self.status_label = tk.Label(root, textvariable=self.label_var,
+                                     fg="white", bg="#121212", font=("Consolas", 16))
+        self.status_label.pack(pady=12)
+
+        btn_frame = tk.Frame(root, bg="#121212")
+        btn_frame.pack(pady=20)
+
+        self.btn_img = tk.Button(btn_frame, text="📷 Upload Image",
+                                 command=self.process_image,
+                                 font=("Consolas", 14), bg="#282828", fg="#00FFAA",
+                                 relief="ridge", padx=12, pady=6)
+        self.btn_img.grid(row=0, column=0, padx=12)
+
+        self.btn_vid = tk.Button(btn_frame, text="🎥 Upload Video",
+                                 command=self.process_video,
+                                 font=("Consolas", 14), bg="#282828", fg="#00FFAA",
+                                 relief="ridge", padx=12, pady=6)
+        self.btn_vid.grid(row=0, column=1, padx=12)
+
+        self.btn_webcam = tk.Button(btn_frame, text="💻 Start Webcam",
+                                    command=self.start_webcam,
+                                    font=("Consolas", 14), bg="#282828", fg="#00FFAA",
+                                    relief="ridge", padx=12, pady=6)
+        self.btn_webcam.grid(row=0, column=2, padx=12)
+
+        self.btn_stop = tk.Button(btn_frame, text="🛑 Stop Webcam",
+                                  command=self.stop_webcam,
+                                  font=("Consolas", 14), bg="#282828", fg="#FF5555",
+                                  relief="ridge", padx=12, pady=6, state=tk.DISABLED)
+        self.btn_stop.grid(row=0, column=3, padx=12)
+
+        self.hands = mp_hands.Hands(min_detection_confidence=0.5,
+                                    min_tracking_confidence=0.5,
+                                    max_num_hands=2)
+
+        self.cap = None
+        self.running = False
+
+    def show_image(self, img_array):
+        img = Image.fromarray(img_array)
+        img = img.resize((600, 450))
+        imgtk = ImageTk.PhotoImage(img)
+        self.panel.imgtk = imgtk
+        self.panel.config(image=imgtk)
+
+    def process_image(self):
+        file_path = filedialog.askopenfilename(filetypes=[("Image files", "*.jpg *.jpeg *.png")])
+        if not file_path:
+            return
+        image = cv2.imread(file_path)
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        results = self.hands.process(image_rgb)
+        gesture_text = "No hand detected"
+        if results.multi_hand_landmarks:
+            if detect_heart_hands(results.multi_hand_landmarks):
+                gesture_text = f"I LOVE YOU {GESTURES['I_LOVE_YOU']}"
+                for hand_landmarks in results.multi_hand_landmarks:
+                    mp_drawing.draw_landmarks(image_rgb, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+            else:
+                for hand_landmarks in results.multi_hand_landmarks:
+                    mp_drawing.draw_landmarks(image_rgb, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+                    gesture = detect_gesture(hand_landmarks)
+                    gesture_text = f"Detected Gesture: {gesture} {GESTURES.get(gesture, '')}"
+        self.label_var.set(gesture_text)
+        self.show_image(image_rgb)
+
+    def process_video(self):
+        file_path = filedialog.askopenfilename(filetypes=[("Video files", "*.mp4 *.avi *.mov *.mkv")])
+        if not file_path:
+            return
+        cap = cv2.VideoCapture(file_path)
+        if not cap.isOpened():
+            messagebox.showerror("Error", "Could not open video file")
+            return
+
+        def run_video():
+            while cap.isOpened():
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                frame = cv2.flip(frame, 1)
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                results = self.hands.process(frame_rgb)
+                gesture_text = "No hand detected"
+                if results.multi_hand_landmarks:
+                    if detect_heart_hands(results.multi_hand_landmarks):
+                        gesture_text = f"I LOVE YOU {GESTURES['I_LOVE_YOU']}"
+                        for hand_landmarks in results.multi_hand_landmarks:
+                            mp_drawing.draw_landmarks(frame_rgb, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+                    else:
+                        for hand_landmarks in results.multi_hand_landmarks:
+                            mp_drawing.draw_landmarks(frame_rgb, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+                            gesture = detect_gesture(hand_landmarks)
+                            gesture_text = f"Detected Gesture: {gesture} {GESTURES.get(gesture, '')}"
+                self.label_var.set(gesture_text)
+                self.show_image(frame_rgb)
+                if cv2.waitKey(25) & 0xFF == ord('q'):
+                    break
+            cap.release()
+
+        threading.Thread(target=run_video).start()
+
+    def start_webcam(self):
+        if self.running:
+            return
+        self.cap = cv2.VideoCapture(0)
+        if not self.cap.isOpened():
+            messagebox.showerror("Error", "Cannot open webcam")
+            return
+        self.running = True
+        self.btn_webcam.config(state=tk.DISABLED)
+        self.btn_stop.config(state=tk.NORMAL)
+        self.process_frame()
+
+    def stop_webcam(self):
+        self.running = False
+        self.btn_stop.config(state=tk.DISABLED)
+        self.btn_webcam.config(state=tk.NORMAL)
+        if self.cap:
+            self.cap.release()
+            self.cap = None
+        cv2.destroyAllWindows()
+        self.panel.config(image='')
+
+    def process_frame(self):
+        if not self.running or not self.cap:
+            return
+        ret, frame = self.cap.read()
+        if not ret:
+            self.stop_webcam()
+            return
+        frame = cv2.flip(frame, 1)
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        results = self.hands.process(frame_rgb)
+        gesture_text = "No hand detected"
+        if results.multi_hand_landmarks:
+            if detect_heart_hands(results.multi_hand_landmarks):
+                gesture_text = f"I LOVE YOU {GESTURES['I_LOVE_YOU']}"
+                for hand_landmarks in results.multi_hand_landmarks:
+                    mp_drawing.draw_landmarks(frame_rgb, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+            else:
+                for hand_landmarks in results.multi_hand_landmarks:
+                    mp_drawing.draw_landmarks(frame_rgb, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+                    gesture = detect_gesture(hand_landmarks)
+                    gesture_text = f"Detected Gesture: {gesture} {GESTURES.get(gesture, '')}"
+        self.label_var.set(gesture_text)
+        self.show_image(frame_rgb)
+        self.root.after(10, self.process_frame)
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = HandGestureApp(root)
+    root.mainloop()
